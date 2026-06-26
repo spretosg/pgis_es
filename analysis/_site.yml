@@ -1,7 +1,7 @@
-name: "pgis_es"
+name: pgis_es
 output_dir: ../docs
 navbar:
-  title: "pgis_es"
+  title: pgis_es
   left:
   - text: Home
     href: index.html
@@ -9,6 +9,10 @@ navbar:
     href: about.html
   - text: License
     href: license.html
+  right:
+  - icon: fab fa-github
+    text: Source code
+    href: https://github.com/spretosg/pgis_es
 output:
   workflowr::wflow_html:
     toc: yes

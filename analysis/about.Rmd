@@ -1,5 +1,5 @@
 ---
-title: "About"
+title: "Analysis"
 output:
   workflowr::wflow_html:
     toc: false

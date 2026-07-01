@@ -1,5 +1,6 @@
 #functions
-
+library(terra)
+library(stringr)
 
 ## function to sample presence points
 make_presence_points <- function(polys, A_roi, all_back_pts, min_in_pts = 10) {
@@ -33,7 +34,7 @@ run_algorithm_comparison <- function(es_ids,
                                      pred,
                                      A_roi,
                                      all_back_pts,
-                                      out_dir = "algorithm_results",
+                                      out_dir,
                                      algos = c("GLM","RF","GAM","MAXENT")) {
 
 
@@ -181,7 +182,6 @@ run_algorithm_comparison <- function(es_ids,
 
 run_participant_holdout <- function(es_ids,
                                      studyID,
-                                     mappers,
                                      ind_pols,
                                      pred,
                                      A_roi,
@@ -249,7 +249,7 @@ run_participant_holdout <- function(es_ids,
     proj_full <- terra::rast(m_full@projection)
 
 
-
+    mappers<-unique(pol_es$userID)
 
 
 
@@ -332,9 +332,14 @@ run_participant_holdout <- function(es_ids,
       projection_list[[as.character(u)]] <- proj_minus
 
       ## Spatial difference
-      diff <- proj_full - proj_minus
+      rel_diff <- (proj_full - proj_minus)/proj_full
 
-      mean_diff <- terra::global(abs(diff), "mean", na.rm=TRUE)[1,1]
+
+      ## conf weighted diff
+      # conf<-pol_es%>%filter(userID == u)%>%select(confidence)
+      # diff_conf<-diff*mean(conf)/5
+
+      mean_diff <- terra::global(abs(rel_diff), "mean", na.rm=TRUE)[1,1]
 
       rmse <- sqrt(
         terra::global(diff^2, "mean", na.rm=TRUE)[1,1]
@@ -385,16 +390,6 @@ run_participant_holdout <- function(es_ids,
 
 
     }#/user loop
-
-    # imp_es <- data.frame(
-    #   studyID = studyID,
-    #   ES = es,
-    #   userID = users_es,
-    #   dem = user_scores$Delta_dem,
-    #   lulc = user_scores$Delta_lulc,
-    #   int = user_scores$Delta_int,
-    #   acc = user_scores$Delta_acc
-    # )
 
     imp_es <- dplyr::bind_rows(importance_all)
     performance_all[[as.character(es)]] <- user_scores
@@ -448,15 +443,12 @@ run_participant_holdout <- function(es_ids,
 
 }
 
-library(terra)
-library(stringr)
 
-calc_algorithm_uncertainty <- function(
-    in_dir,
-    out_dir
+
+calc_algorithm_var <- function(
+    in_dir
 ){
 
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
   files <- list.files(
     in_dir,
@@ -478,24 +470,21 @@ calc_algorithm_uncertainty <- function(
 
     stk <- rast(f)
 
-    ## pixel-wise uncertainty
-    Ualg <- app(stk, sd, na.rm = TRUE)
+    ## pixel-wise variance
+    V_alg <- app(stk, sd, na.rm = TRUE)
 
-    names(Ualg) <- "U_algorithm"
+    names(V_alg) <- "var_alg"
 
     writeRaster(
-      Ualg,
-      file.path(
-        out_dir,
-        paste0(studyID, "_", ES, "_Ualgorithm.tif")
-      ),
-      overwrite=TRUE
+      V_alg,
+
+        paste0("output/alg_performance/var_alg/",studyID, "_", ES, "_V_alg.tif"), overwrite=TRUE
     )
 
     if(is.null(study_list[[studyID]]))
       study_list[[studyID]] <- list()
 
-    study_list[[studyID]][[ES]] <- Ualg
+    study_list[[studyID]][[ES]] <- V_alg
   }
 
   ## average across ES for each study
@@ -505,14 +494,12 @@ calc_algorithm_uncertainty <- function(
 
     Umean <- app(es_stack, mean, na.rm=TRUE)
 
-    names(Umean) <- "Mean_Ualgorithm"
+    names(Umean) <- "Mean_V_alg"
 
     writeRaster(
       Umean,
-      file.path(
-        out_dir,
-        paste0(st, "_MeanAlgorithmUncertainty.tif")
-      ),
+
+        paste0("output/alg_performance/var_alg/",st, "_MeanAlgVariance.tif"),
       overwrite=TRUE
     )
 
@@ -524,12 +511,11 @@ calc_algorithm_uncertainty <- function(
 
 library(terra)
 
-calc_participant_uncertainty <- function(
+calc_participant_var <- function(
     in_dir,
     out_dir
 ){
 
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
   files <- list.files(
     in_dir,
@@ -551,17 +537,22 @@ calc_participant_uncertainty <- function(
     studyID <- parts[1]
     ES <- paste(parts[-1], collapse = "_")
 
+    # conf<-read.csv(paste0("data/",studyID,"/es_mappingR1.csv"))
+    # conf_es <- conf %>%
+    #   filter(esID == ES & siteID == studyID) %>%
+    #   select(userID, confidence)
+
     stk <- rast(f)
 
-    Upart <- app(stk, sd, na.rm = TRUE)
+    v_part <- app(stk, sd, na.rm = TRUE)
 
-    names(Upart) <- "U_participant"
+    names(v_part) <- "var_part"
 
     writeRaster(
-      Upart,
+      v_part,
       file.path(
         out_dir,
-        paste0(studyID, "_", ES, "_Uparticipant.tif")
+        paste0(studyID, "_", ES, "_V_part.tif")
       ),
       overwrite = TRUE
     )
@@ -569,7 +560,7 @@ calc_participant_uncertainty <- function(
     if(is.null(study_list[[studyID]]))
       study_list[[studyID]] <- list()
 
-    study_list[[studyID]][[ES]] <- Upart
+    study_list[[studyID]][[ES]] <- v_part
   }
 
   ## Mean uncertainty across ES
@@ -577,15 +568,15 @@ calc_participant_uncertainty <- function(
 
     es_stack <- rast(study_list[[st]])
 
-    Umean <- app(es_stack, mean, na.rm = TRUE)
+    Vmean <- app(es_stack, mean, na.rm = TRUE)
 
-    names(Umean) <- "Mean_Uparticipant"
+    names(Vmean) <- "Mean_V_part"
 
     writeRaster(
-      Umean,
+      Vmean,
       file.path(
         out_dir,
-        paste0(st, "_MeanParticipantUncertainty.tif")
+        paste0(st, "_MeanPartVar.tif")
       ),
       overwrite = TRUE
     )
@@ -599,13 +590,14 @@ calc_participant_uncertainty <- function(
 library(terra)
 library(ggplot2)
 
-plot_uncertainty_ratio <- function(
+plot_variance_ratio <- function(
     alg_dir,
     part_dir){
 
+  borders<-st_read("data/studArea.gpkg")
   alg_files <- list.files(
     alg_dir,
-    pattern = "_MeanAlgorithmUncertainty\\.tif$",
+    pattern = "_MeanAlgVariance\\.tif$",
     full.names = TRUE
   )
 
@@ -614,15 +606,15 @@ plot_uncertainty_ratio <- function(
   for(f_alg in alg_files){
 
     studyID <- sub(
-      "_MeanAlgorithmUncertainty\\.tif",
+      "_MeanAlgVariance\\.tif",
       "",
       basename(f_alg)
     )
 
     f_part <- file.path(
       part_dir,
-      paste0(studyID,
-             "_MeanParticipantUncertainty.tif")
+      paste0("part_var/",studyID,
+             "_MeanPartVar.tif")
     )
 
     if(!file.exists(f_part)){
@@ -630,23 +622,44 @@ plot_uncertainty_ratio <- function(
       next
     }
 
-    Ualg  <- rast(f_alg)
-    Upart <- rast(f_part)
+    Valg  <- rast(f_alg)
+    Vpart <- rast(f_part)
+
+    # summary(values(Valg))
+    # summary(values(Vpart))
+    #
+    # boxplot(Valg)
+    # boxplot(Vpart,add=T)
+
 
     ## ratio
-    R <- Upart / (Upart + Ualg)
+    R <- Vpart / (Vpart + Valg)
 
-    names(R) <- "Ratio"
+    names(R) <- "var_ratio"
+
+    tmp_border<-borders%>%filter(siteID == studyID)
+    boundary_vect <- vect(tmp_border)
+    R <- crop(R, boundary_vect)
+    R <- mask(R, boundary_vect)
 
     ## convert for ggplot
     d <- as.data.frame(R,
                        xy = TRUE,
                        na.rm = TRUE)
 
-    p <- ggplot(d,
-                aes(x, y, fill = Ratio)) +
-      geom_raster() +
-      coord_equal() +
+
+
+    p <- ggplot() +
+      geom_raster(
+        data = d,
+        aes(x, y, fill = var_ratio)
+      ) +
+      geom_sf(
+        data = tmp_border,
+        fill = NA,
+        color = "black",
+        linewidth = 0.5
+      ) +
       scale_fill_gradient2(
         low = "#2b83ba",
         mid = "white",
@@ -654,15 +667,10 @@ plot_uncertainty_ratio <- function(
         midpoint = 0.5,
         limits = c(0,1),
         name = expression(R)
-      ) +
-      labs(title = studyID) +
-      theme_void() +
-      theme(
-        plot.title = element_text(
-          hjust = 0.5,
-          face = "bold"
-        )
-      )
+      )  +
+      coord_sf() +
+      theme_minimal()
+
 
     plot_list[[studyID]] <- p
 
@@ -676,7 +684,7 @@ plot_uncertainty_ratio <- function(
 library(terra)
 library(dplyr)
 
-read_uncertainty_summary <- function(in_dir,
+read_var_summary <- function(in_dir,
                                      suffix){
 
   files <- list.files(
@@ -700,11 +708,132 @@ read_uncertainty_summary <- function(in_dir,
     data.frame(
       studyID = studyID,
       ES = ES,
-      MeanUncertainty = terra::global(r, "mean", na.rm = TRUE)[1,1]
+      MeanVar = terra::global(r, "mean", na.rm = TRUE)[1,1]/terra::global(r, "max", na.rm = TRUE)[1,1]
+
     )
 
   })
 
   bind_rows(res)
 
+}
+
+
+
+build_uncertainty_df <- function(
+    part_uncertainty_dir,
+    alg_dir,
+    env_base_dir,
+    part_pattern = "_V_part\\.tif$",
+    alg_pattern = "_algo\\.tif$"
+){
+
+  part_files <- list.files(
+    part_uncertainty_dir,
+    pattern = part_pattern,
+    full.names = TRUE
+  )
+
+
+  alg_files <- list.files(
+    alg_dir,
+    pattern = alg_pattern,
+    full.names = TRUE
+  )
+
+  df_all <- vector("list", length(part_files))
+
+  for(i in seq_along(part_files)){
+
+    f <- part_files[i]
+
+    nm <- tools::file_path_sans_ext(basename(f))
+    nm <- sub(pattern = "_V_part$", "", nm)
+
+    parts <- strsplit(nm, "_")[[1]]
+
+    studyID <- parts[1]
+    ES <- paste(parts[-1], collapse = "_")
+
+    message(studyID, "  ", ES)
+
+    ## response
+    U_part <- rast(f)
+    U_algo<-rast(paste0("output/alg_performance/",studyID,"_",ES,"_algo.tif"))
+    U_algo <- app(U_algo, sd, na.rm = TRUE)
+    R <- U_part / (U_part + U_algo)
+    names(R)<-"R"
+
+    ## environmental predictors
+    env_files <- list.files(
+      file.path(env_base_dir, studyID, "2_env_var"),
+      pattern = "\\.tif$",
+      full.names = TRUE
+    )
+
+    template <- terra::rast(env_files[1])
+
+    env <- lapply(env_files, function(f){
+
+      r <- terra::rast(f)
+
+      ## project if needed
+      if(!terra::same.crs(r, template))
+        r <- terra::project(r, template)
+
+      ## align geometry if needed
+      if(!terra::compareGeom(r, template, stopOnError = FALSE))
+        r <- terra::resample(r, template)
+
+      r
+
+    })
+
+    env <- terra::rast(env)
+
+    ## extract values
+    dat <- spatSample(
+      c(R, env),
+      size = 10000,
+      method = "random",
+      na.rm = TRUE,
+      as.df = TRUE
+    )
+    # dat <- terra::as.data.frame(dat, na.rm = TRUE)
+
+    # names(dat)[1] <- "U"
+
+    dat$studyID <- studyID
+    dat$ES <- ES
+
+    df_all[[i]] <- dat
+
+  }
+
+  bind_rows(df_all)
+
+}
+
+
+calc_pdp <- function(dat, m, var) {
+
+  xseq <- seq(min(dat[[var]]), max(dat[[var]]), length.out = 100)
+
+  map_dfr(xseq, function(x) {
+
+    newdat <- dat
+    newdat[[var]] <- x
+
+    p <- predict(
+      m,
+      newdata = newdat,
+      type = "response"
+    )
+
+    tibble(
+      x = x,
+      R = mean(p),
+      SD = sd(p)
+    )
+  })
 }

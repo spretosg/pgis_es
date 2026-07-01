@@ -4,6 +4,7 @@ library(sf)
 library(DT)
 library(dplyr)
 library(ggplot2)
+library(ggrepel)
 library(terra)
 source("analysis/fkt_utils.R")
 
@@ -14,7 +15,7 @@ source("analysis/fkt_utils.R")
 ## plot algo performance per ES per studArea
 ## Read all algorithm performance tables
 files <- list.files(
-  "output",
+  "output/alg_performance",
   pattern = "_algorithm_performance\\.rds$",
   full.names = TRUE
 )
@@ -43,9 +44,9 @@ ggplot(alg_perf,
   )
 
 
-### plot 2 var imp for RF
+### plot 2 var imp
 files <- list.files(
-  "output",
+  "output/alg_performance",
   pattern = "_importance\\.rds$",
   full.names = TRUE
 )
@@ -103,7 +104,32 @@ files <- list.files(
 )
 
 part_unc <- bind_rows(lapply(files, readRDS))
-part_sum<-part_unc%>%group_by(studyID,ES)
+
+### test clustering:
+# test<-part_unc%>%filter(studyID == "FRL04",ES == "aest")
+# test <- test |>
+#   dplyr::select(
+#     delta_AUC,
+#     MeanDiff,
+#     RMSE,
+#     Corr,
+#     Delta_dem,
+#     Delta_lulc,
+#     Delta_int,
+#     Delta_acc
+#   )
+#
+# X <- scale(test)
+#
+#
+# hc <- hclust(dist(X), method = "ward.D2")
+# plot(hc)
+#
+# clusters <- cutree(hc, k = 3)
+#
+# test$cluster <- factor(clusters)
+
+
 
 ggplot(part_unc,
        aes(x = ES,
@@ -127,55 +153,109 @@ ggplot(part_unc,
 
 ##  R 0=algorithm uncertainty higher, R = 1 participant uncertainty higher
 
-plots <- plot_uncertainty_ratio(
-  alg_dir = "output/uncertainty",
-  part_dir = "output/part_uncertainty"
-)
+mean_var_ratio_plot<-plot_variance_ratio("output/alg_performance/var_alg",
+                                         "output/participants_results")
+plot(mean_var_ratio_plot$FRL04)
 
-plot(plots$SK021)
 
-## relationship algo and mapper
-part_sum<-part_unc%>%group_by(studyID,ES)%>%summarise(MeanPartDiff = mean(MeanDiff))
-part_sum<-part_sum%>%select(studyID,ES,MeanPartDiff)
-colnames(part_sum)<-c("studyID","ES","u_participant")
 
-# algo uncertainty from raster:
-algo_unc_pix<-read_uncertainty_summary("output/uncertainty/","_algo_Ualgorithm")
-algo_unc_pix$ES <- gsub("_algo_Ualgorithm", "", algo_unc_pix$ES)
-colnames(algo_unc_pix)<-c("studyID","ES","u_algorithm")
+## relationship algo and mapper (standardized)
+# part_sum<-part_unc%>%group_by(studyID,ES)%>%summarise(MeanPartDiff = mean(MeanDiff))
+# part_sum<-part_sum%>%select(studyID,ES,MeanPartDiff)
+# colnames(part_sum)<-c("studyID","ES","u_participant")
+
+part_var_pix<-read_var_summary(in_dir="output/participants_results/part_var/",suffix = "_V_part")
+part_var_pix$ES <- gsub("_V_part", "", part_var_pix$ES)
+colnames(part_var_pix)<-c("studyID","ES","var_participant")
+
+# algo uncertainty from raster (also standardized):
+algo_var_pix<-read_uncertainty_summary("output/alg_performance/var_alg",suffix = "_V_alg")
+algo_var_pix$ES <- gsub("_V_alg", "", algo_var_pix$ES)
+colnames(algo_var_pix)<-c("studyID","ES","var_algorithm")
 
 # join with studyID and ES
-uncertainty_all<-merge(part_sum,algo_unc_pix,by=c("studyID","ES"))
+uncertainty_all<-merge(part_var_pix,algo_var_pix,by=c("studyID","ES"))
+
+uncertainty_all <- uncertainty_all %>%
+  dplyr::group_by(studyID) %>%
+  dplyr::mutate(
+    Alg = var_algorithm / max(var_algorithm),
+    Part = var_participant / max(var_participant)
+  ) %>%
+  dplyr::ungroup()
 
 ##
 
-ggplot(uncertainty_all,
-       aes(x = u_algorithm,
-           y = u_participant,
-           label = ES)) +
 
-  geom_abline(intercept = 0,
-              slope = 1,
-              linetype = 2,
-              colour = "grey50") +
+ggplot(
+  uncertainty_all,
+  aes(
+    x = var_algorithm,
+    y = var_participant,
+    colour = ES
+  )
+) +
 
-  geom_point(aes(colour = ES),
-             size = 3) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = 2,
+    colour = "grey70",
+    linewidth = 0.6
+  ) +
 
-  ggrepel::geom_text_repel(size = 3,
-                           show.legend = FALSE) +
+
+  geom_point(
+    size = 3.5,
+    alpha = 0.9
+  ) +
+
+  ggrepel::geom_text_repel(
+    aes(label = ES),
+    size = 3,
+    max.overlaps = 6,
+    show.legend = FALSE
+  ) +
 
   facet_wrap(~studyID) +
 
   coord_equal() +
 
+  scale_colour_viridis_d(option = "D") +
+
   labs(
-    x = "Mean algorithm uncertainty",
-    y = "Mean participant uncertainty"
+    x = "Algorithm variation",
+    y = "Participant variation",
+    colour = "Ecosystem service"
   ) +
 
-  theme_bw() +
+  theme_minimal(base_size = 13) +
+
   theme(
-    panel.grid = element_blank(),
-    legend.position = "none"
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour = "grey90"),
+    strip.text = element_text(face = "bold"),
+    legend.position = "none",
+    aspect.ratio = 1
   )
+
+
+
+ggplot(df,
+          aes(x, R,
+              colour = studyID,
+              fill = studyID)) +
+  geom_hline(
+    yintercept = 0.5,
+    linetype = "dashed",
+    colour = "grey50",
+    linewidth = 0.5
+  ) +
+  geom_ribbon(aes(ymin = pmax(0, R - SD),
+                  ymax = pmin(1, R + SD)),
+              alpha = 0.15,
+              colour = NA) +
+  geom_line(linewidth = 1) +
+  #facet_wrap(~predictor+ES, scales = "free_x") +
+  facet_grid(vars(ES), vars(predictor),scales = "free_x" )+
+  theme_classic()
